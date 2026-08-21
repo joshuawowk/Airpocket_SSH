@@ -13,6 +13,8 @@
       "port": 22,
       "user": "demo",
       "password": "YOUR_SSH_PASSWORD",
+      "keyPath": "",
+      "keyPassphrase": "",
       "terminal": "xterm-256color"
     }
   ],

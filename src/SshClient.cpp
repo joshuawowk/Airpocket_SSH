@@ -3,10 +3,14 @@
 #if ENABLE_SSH
 #include <libssh_esp32.h>
 #include <libssh/libssh.h>
+#include <SD.h>
+#include <cstring>
+#include <vector>
 #endif
 
 extern void tab5SetCrashStage(const char* stage);
 extern void tab5SshProgress(const char* stage);
+extern bool tab5EnsureSdReady();
 
 void reportSshStage(const char* stage)
 {
@@ -23,6 +27,91 @@ void ensureLibsshStarted()
         libssh_begin();
         libsshStarted = true;
     }
+}
+
+// Reads a private key off the SD card into `out`. The buffer is the caller's to
+// scrub -- it holds key material, so it is deliberately not an Arduino String.
+bool readPrivateKey(const String& path, std::vector<char>& out, String& error)
+{
+    String resolved = path;
+    resolved.trim();
+    if (!resolved.startsWith("/")) {
+        resolved = "/" + resolved;
+    }
+    if (!tab5EnsureSdReady()) {
+        error = "SD card not mounted, cannot read " + resolved;
+        return false;
+    }
+    File file = SD.open(resolved.c_str(), FILE_READ);
+    if (!file) {
+        error = "key not found on SD: " + resolved;
+        return false;
+    }
+    const size_t size = file.size();
+    // A 4096-bit RSA key in an OpenSSH container is still well under 8 KB.
+    if (size == 0 || size > 32768) {
+        file.close();
+        error = size ? "key file is implausibly large: " + resolved
+                     : "key file is empty: " + resolved;
+        return false;
+    }
+    out.assign(size + 1, '\0');
+    const size_t got = file.read(reinterpret_cast<uint8_t*>(out.data()), size);
+    file.close();
+    if (got != size) {
+        std::memset(out.data(), 0, out.size());
+        out.clear();
+        error = "short read on key file: " + resolved;
+        return false;
+    }
+    out[size] = '\0';
+    return true;
+}
+
+// Public-key auth, falling back to password when a password is also configured.
+// A profile with no keyPath behaves exactly as it did before this existed.
+int authenticateSession(ssh_session session, const SshProfile& profile, String& error)
+{
+    String keyPath = profile.keyPath;
+    keyPath.trim();
+
+    if (keyPath.length()) {
+        reportSshStage("ssh_auth_publickey");
+        std::vector<char> pem;
+        if (readPrivateKey(keyPath, pem, error)) {
+            ssh_key key = nullptr;
+            const char* passphrase =
+                profile.keyPassphrase.length() ? profile.keyPassphrase.c_str() : nullptr;
+            const int rc = ssh_pki_import_privkey_base64(pem.data(), passphrase, nullptr, nullptr, &key);
+            std::memset(pem.data(), 0, pem.size());
+            pem.clear();
+            if (rc == SSH_OK && key) {
+                const int auth = ssh_userauth_publickey(session, nullptr, key);
+                ssh_key_free(key);
+                if (auth == SSH_AUTH_SUCCESS) {
+                    return auth;
+                }
+                error = ssh_get_error(session);
+                if (!error.length()) {
+                    error = "public-key auth rejected";
+                }
+            } else {
+                error = "cannot parse key (wrong passphrase or unsupported format)";
+            }
+        }
+        // Key auth did not work. Without a password there is nothing left to try,
+        // so surface the key error rather than sending an empty password.
+        if (!profile.password.length()) {
+            return SSH_AUTH_DENIED;
+        }
+    }
+
+    reportSshStage("ssh_auth_password");
+    const int auth = ssh_userauth_password(session, nullptr, profile.password.c_str());
+    if (auth != SSH_AUTH_SUCCESS) {
+        error = ssh_get_error(session);
+    }
+    return auth;
 }
 
 ssh_session openSession(const SshProfile& profile, String& error)
@@ -44,8 +133,7 @@ ssh_session openSession(const SshProfile& profile, String& error)
         ssh_free(session);
         return nullptr;
     }
-    if (ssh_userauth_password(session, nullptr, profile.password.c_str()) != SSH_AUTH_SUCCESS) {
-        error = ssh_get_error(session);
+    if (authenticateSession(session, profile, error) != SSH_AUTH_SUCCESS) {
         ssh_disconnect(session);
         ssh_free(session);
         return nullptr;
@@ -105,10 +193,8 @@ bool SshClient::connect(const SshProfile& profile, String& error, int columns, i
         return false;
     }
 
-    reportSshStage("ssh_auth_password");
-    int auth = ssh_userauth_password(session, nullptr, profile.password.c_str());
+    int auth = authenticateSession(session, profile, error);
     if (auth != SSH_AUTH_SUCCESS) {
-        error = ssh_get_error(session);
         ssh_disconnect(session);
         ssh_free(session);
         return false;

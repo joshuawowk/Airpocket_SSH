@@ -15,6 +15,12 @@ struct SshProfile {
     uint16_t port{22};
     String user;
     String password;
+    // Absolute path to a private key on the SD card, e.g. "/id_ed25519".
+    // When set, public-key auth is tried first and `password` is only used as
+    // a fallback. OpenSSH and PEM containers are both accepted (ed25519, RSA,
+    // ECDSA), because LibSSH-ESP32 links libssh's own PKI, not libssh2's.
+    String keyPath;
+    String keyPassphrase;
     String terminal{"xterm-256color"};
 };
 

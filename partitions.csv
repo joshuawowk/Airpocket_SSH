@@ -10,7 +10,7 @@
 # other app). A "fill the rest of the chip" LittleFS partition makes that
 # allocation impossible and the install fails at the repartition step.
 #
-# app0     4 MB   - firmware.bin is ~3.2 MB, leaving ~0.8 MB of headroom.
+# app0     4 MB   - firmware.bin is ~3.5 MB, leaving ~0.7 MB of headroom.
 # littlefs 1 MB   - only holds profiles.json (<1 KB); 1 MB is generous already.
 nvs,      data, nvs,      0x9000,   0x5000,
 otadata,  data, ota,      0xe000,   0x2000,

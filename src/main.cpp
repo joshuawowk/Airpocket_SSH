@@ -3889,6 +3889,8 @@ String sshFieldValue(uint8_t field)
     if (field == 2) return String(p.port);
     if (field == 3) return p.user;
     if (field == 4) return p.password;
+    if (field == 5) return p.keyPath;
+    if (field == 6) return p.keyPassphrase;
     return p.terminal;
 }
 
@@ -3903,7 +3905,9 @@ void setSshFieldValue(uint8_t field, const String& value)
     if (field == 2) p.port = static_cast<uint16_t>(constrain(value.toInt(), 1, 65535));
     if (field == 3) p.user = value;
     if (field == 4) p.password = value;
-    if (field == 5) p.terminal = value.length() ? value : "xterm-256color";
+    if (field == 5) p.keyPath = value;
+    if (field == 6) p.keyPassphrase = value;
+    if (field == 7) p.terminal = value.length() ? value : "xterm-256color";
 }
 
 String configFieldValue(uint8_t field)
@@ -3949,7 +3953,7 @@ void setConfigFieldValue(uint8_t field, const String& value)
 uint8_t editFieldCount()
 {
     if (screen == Screen::WifiEdit) return 3;
-    if (screen == Screen::SshEdit) return 6;
+    if (screen == Screen::SshEdit) return 8;
     if (screen == Screen::ConfigEdit) return 12;
     return 0;
 }
@@ -4296,7 +4300,7 @@ void drawEditFields(const char* title, const char* const* labels, uint8_t count,
         if (screen == Screen::WifiEdit) rawValue = wifiFieldValue(i);
         else if (screen == Screen::SshEdit) rawValue = sshFieldValue(i);
         else rawValue = configFieldValue(i);
-        bool secret = (screen == Screen::SshEdit && i == 4) || (screen == Screen::WifiEdit && i == 2);
+        bool secret = (screen == Screen::SshEdit && (i == 4 || i == 6)) || (screen == Screen::WifiEdit && i == 2);
         bool choiceField = screen == Screen::ConfigEdit && (i == 4 || i == 5 || i >= 8);
         String value = safeValue(rawValue, secret);
         size_t cursor = (i == editField && !choiceField) ? min(editCursor, rawValue.length()) : rawValue.length();
@@ -4384,8 +4388,9 @@ void draw()
         static const char* const labels[] = {"Name", "SSID", "Password"};
         drawEditFields("Edit Wi-Fi", labels, 3, false);
     } else if (screen == Screen::SshEdit) {
-        static const char* const labels[] = {"Name", "Host", "Port", "User", "Password", "Term"};
-        drawEditFields("Edit SSH", labels, 6, true);
+        static const char* const labels[] = {"Name", "Host",    "Port",     "User",
+                                             "Password", "Key", "Key Pass", "Term"};
+        drawEditFields("Edit SSH", labels, 8, true);
     } else if (screen == Screen::ConfigEdit) {
         static const char* const labels[] = {"Device",     "Region",   "UTC min",    "NTP",
                                              "Keymap",     "BLE KB",   "BLE Name",   "BLE Addr",
@@ -6243,6 +6248,15 @@ void initScreenSprite()
     }
 }
 
+}
+
+// Bridges into ensureSdReady(), which has internal linkage. Private keys live
+// on the SD card, and a key-auth connect may be the first thing that touches it
+// after a Launcher warm reset -- so it has to go through the retry path rather
+// than a bare SD.open().
+bool tab5EnsureSdReady()
+{
+    return ensureSdReady();
 }
 
 void tab5SetCrashStage(const char* stage)
