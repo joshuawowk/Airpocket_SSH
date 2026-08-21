@@ -1,5 +1,18 @@
 # Name,   Type, SubType, Offset,   Size,     Flags
-nvs,      data, nvs,     0x9000,   0x5000,
-otadata,  data, ota,     0xe000,   0x2000,
-app0,     app,  factory, 0x10000,  0x400000,
-littlefs, data, littlefs, 0x410000, 0xBF0000,
+#
+# Layout notes
+# ------------
+# Total footprint is deliberately kept small (~5 MB of the Tab5's 16 MB flash) so
+# this firmware can also be installed as a guest app by the bmorcelli-style
+# Launcher, which reads this table out of the merged factory image and has to
+# carve the app + data partitions out of whatever flash the Launcher itself is
+# not already using (~9.75 MB on a Tab5 that already hosts the Launcher and one
+# other app). A "fill the rest of the chip" LittleFS partition makes that
+# allocation impossible and the install fails at the repartition step.
+#
+# app0     4 MB   - firmware.bin is ~3.2 MB, leaving ~0.8 MB of headroom.
+# littlefs 1 MB   - only holds profiles.json (<1 KB); 1 MB is generous already.
+nvs,      data, nvs,      0x9000,   0x5000,
+otadata,  data, ota,      0xe000,   0x2000,
+app0,     app,  factory,  0x10000,  0x400000,
+littlefs, data, littlefs, 0x410000, 0x100000,

@@ -27,6 +27,7 @@ Wi-Fi.
 
 - [Command list](docs/COMMANDS.md)
 - [コマンド一覧](docs/COMMANDS.ja.md)
+- [Installing through the M5Stack Launcher](docs/LAUNCHER.md)
 - [Python and graphics](docs/PYTHON.md)
 - [Demo scripts](docs/DEMOS.md)
 - [デモスクリプト](docs/DEMOS.ja.md)
@@ -36,7 +37,8 @@ Wi-Fi.
 
 - M5Stack Tab5
 - Tab5 Keyboard
-- microSD card
+- microSD card, formatted **FAT32** (the Arduino SD library used here does not
+  read exFAT, which is what cards larger than 32 GB ship with)
 - USB cable for flashing and serial diagnostics
 - Wi-Fi network reachable by the Tab5
 
@@ -67,12 +69,36 @@ and LittleFS profiles, use:
 .\tools\flash_tab5.ps1 -Port COM4
 ```
 
+On Linux/macOS:
+
+```bash
+tools/flash_tab5.sh --port /dev/ttyACM0
+```
+
 If `data/profiles.local.json` exists, this command temporarily uses that ignored
 local profile file for the LittleFS image, then restores the public
 `data/profiles.json`. For a clean public image for M5Burner export:
 
 ```powershell
 .\tools\flash_tab5.ps1 -Port COM4 -UseLocalProfiles:$false -EraseFirst
+```
+
+```bash
+tools/flash_tab5.sh --port /dev/ttyACM0 --erase
+```
+
+## Installing Alongside Other Firmware
+
+The Tab5 can host this firmware as a guest app under the M5Stack Launcher
+instead of owning the whole chip. That path has one hard requirement — the
+partition table in `partitions.csv` has to fit in the flash the Launcher is not
+already using — so read [docs/LAUNCHER.md](docs/LAUNCHER.md) before changing
+partition sizes.
+
+```bash
+tools/build_factory_bin.sh                     # merged full-flash image
+tools/launcher_install.py app --create-littlefs # install over USB, headless
+tools/launcher_install.py --boot-launcher       # go back to the Launcher
 ```
 
 ## Configuration

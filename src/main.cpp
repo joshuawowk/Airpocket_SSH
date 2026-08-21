@@ -112,6 +112,7 @@ bool timeSynced = false;
 uint32_t lastTimeSyncAttempt = 0;
 bool sdReady = false;
 bool sdInitAttempted = false;
+uint32_t sdLastInitAttemptMs = 0;
 String sdLastError = "not initialized";
 String sdCwd = "/";
 struct SdModeEntry {
@@ -150,6 +151,13 @@ constexpr int SD_SPI_CS_PIN = 42;
 constexpr int SD_SPI_SCK_PIN = 43;
 constexpr int SD_SPI_MOSI_PIN = 44;
 constexpr int SD_SPI_MISO_PIN = 39;
+// 25 MHz is the ESP32 SD-over-SPI driver's hard ceiling; back off one step so
+// cards that reject CMD59 (and therefore run without CRC protection) still have
+// margin. Retries cover the Tab5's flaky first mount after a warm reset.
+constexpr uint32_t SD_SPI_HZ = 20000000;
+constexpr int kSdInitAttempts = 6;
+constexpr uint32_t kSdInitSettleMs = 120;
+constexpr uint32_t kSdRetryIntervalMs = 2000;
 
 constexpr int HeaderH = 44;
 constexpr int HeaderTouchH = HeaderH * 3;
@@ -1838,16 +1846,29 @@ bool ensureSdReady()
     if (sdReady) {
         return true;
     }
-    if (!sdInitAttempted) {
-        sdInitAttempted = true;
-        SPI.begin(SD_SPI_SCK_PIN, SD_SPI_MISO_PIN, SD_SPI_MOSI_PIN, SD_SPI_CS_PIN);
-        if (SD.begin(SD_SPI_CS_PIN, SPI, 25000000)) {
+    // The Tab5's SPI microSD intermittently misses the first init after a warm
+    // reset, and a chain-loading Launcher hands us exactly that kind of reset.
+    // Retry with a settle delay instead of latching the failure for the whole
+    // session, and rate-limit so a genuinely empty slot is not hammered.
+    const uint32_t now = millis();
+    if (sdInitAttempted && now - sdLastInitAttemptMs < kSdRetryIntervalMs) {
+        return false;
+    }
+    sdInitAttempted = true;
+    sdLastInitAttemptMs = now;
+
+    SPI.begin(SD_SPI_SCK_PIN, SD_SPI_MISO_PIN, SD_SPI_MOSI_PIN, SD_SPI_CS_PIN);
+    for (int attempt = 0; attempt < kSdInitAttempts; ++attempt) {
+        if (attempt) {
+            delay(kSdInitSettleMs);
+        }
+        if (SD.begin(SD_SPI_CS_PIN, SPI, SD_SPI_HZ)) {
             sdReady = true;
             sdLastError = "";
             return true;
         }
-        sdLastError = "SD card not detected";
     }
+    sdLastError = "SD card not detected";
     return false;
 }
 
@@ -6190,12 +6211,34 @@ void initScreenSprite()
         screenSprite.setColorDepth(4);
         screenSpriteReady = screenSprite.createSprite(M5.Display.width(), M5.Display.height()) != nullptr;
     }
+    for (int attempt = 0; !screenSpriteReady && attempt < 3; ++attempt) {
+        // PSRAM is not always usable on the first try straight after a warm
+        // reset (which is how the Launcher hands control over), so give it a
+        // moment before declaring the display unusable.
+        delay(100);
+        screenSprite.setColorDepth(8);
+        screenSpriteReady = screenSprite.createSprite(M5.Display.width(), M5.Display.height()) != nullptr;
+        if (!screenSpriteReady) {
+            screenSprite.setColorDepth(4);
+            screenSpriteReady = screenSprite.createSprite(M5.Display.width(), M5.Display.height()) != nullptr;
+        }
+    }
     if (!screenSpriteReady) {
+        // Everything downstream draws into the sprite, so there is no safe way
+        // to continue. Halt visibly, and say why on the serial console too --
+        // this used to be a silent forever-loop with no diagnostics at all.
         M5.Display.fillScreen(TFT_BLACK);
         M5.Display.setTextColor(TFT_RED, TFT_BLACK);
         M5.Display.drawString("Sprite alloc failed", 8, 8);
+        Serial.begin(115200);
         while (true) {
-            delay(1000);
+            Serial.printf("[fatal] screen sprite alloc failed for %dx%d; psram free=%u total=%u heap free=%u\n",
+                          static_cast<int>(M5.Display.width()),
+                          static_cast<int>(M5.Display.height()),
+                          static_cast<unsigned>(ESP.getFreePsram()),
+                          static_cast<unsigned>(ESP.getPsramSize()),
+                          static_cast<unsigned>(ESP.getFreeHeap()));
+            delay(5000);
         }
     }
 }
@@ -6233,11 +6276,24 @@ void setup()
     WiFi.onEvent(handleWifiEvent, ARDUINO_EVENT_WIFI_STA_DISCONNECTED);
     terminal.append("Tab5 CLI\n");
     appendStatus("[boot] display ready");
+    // Pin the Tab5's ESP-Hosted SDIO wiring before anything can bring the
+    // co-processor up. The esp32-p4-evboard variant bakes in EV-board defaults
+    // where GPIO15 is the C6 reset and GPIO54 is external-port I2C SCL on a
+    // Tab5. This used to happen only on the Wi-Fi path, which is skipped
+    // entirely when no Wi-Fi profile is configured -- leaving BLE to come up
+    // against the wrong pins.
+    configureTab5WifiPins();
+
     esp_reset_reason_t resetReason = esp_reset_reason();
     appendStatus(String("[boot] reset reason: ") + static_cast<int>(resetReason));
     if (crashStageMagic == 0x54414235 && strlen(crashStage)) {
         appendStatus(String("[boot] previous stage: ") + crashStage);
     }
+
+    // Mounting LittleFS can trigger a format (formatOnFail) on a partition the
+    // Launcher has just created, which takes seconds. Put something on screen
+    // first so that does not look like a freeze right after install.
+    draw();
 
     if (!settings.begin()) {
         appendStatus(String("[boot] ") + settings.lastError());
