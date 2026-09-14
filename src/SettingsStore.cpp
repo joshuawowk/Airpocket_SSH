@@ -49,6 +49,8 @@ bool SettingsStore::load(AppConfig& config)
         profile.port = item["port"] | 22;
         profile.user = item["user"] | "";
         profile.password = item["password"] | "";
+        profile.keyPath = item["keyPath"] | "";
+        profile.keyPassphrase = item["keyPassphrase"] | "";
         profile.terminal = item["terminal"] | "xterm-256color";
         if (profile.name.length() && profile.host.length() && profile.user.length()) {
             config.ssh.push_back(profile);
@@ -125,6 +127,8 @@ bool SettingsStore::save(const AppConfig& config)
         item["port"] = profile.port;
         item["user"] = profile.user;
         item["password"] = profile.password;
+        item["keyPath"] = profile.keyPath;
+        item["keyPassphrase"] = profile.keyPassphrase;
         item["terminal"] = profile.terminal;
     }
 
